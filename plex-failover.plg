@@ -1,0 +1,123 @@
+<?xml version="1.0"?>
+<PLUGIN  name="Plex Failover Supervisor"
+         author="Trevon Rawls"
+         version="2025.08.18"
+         launch=""
+         pluginURL="https://raw.githubusercontent.com/<you>/unraid-plex-failover-plugin/main/plex-failover.plg"
+         support="https://forums.unraid.net/"
+         icon="https://raw.githubusercontent.com/<you>/unraid-plex-failover-plugin/main/icons/plex-failover.png">
+
+  <CATEGORY>Utilities:Media</CATEGORY>
+  <LICENSE>MIT</LICENSE>
+  <DESCRIPTION>
+    Plex In-Container Failover Supervisor: auto/forced failover between two Plex containers,
+    Unraid notifications, and a 'plex-mode' CLI with bash-completion.
+  </DESCRIPTION>
+  <CHANGES>
+    Initial release.
+  </CHANGES>
+
+  <!-- ---------- INSTALL SCRIPT ---------- -->
+    <FILE Run="/bin/bash">
+    <![CDATA[
+set -e
+REPO_RAW="https://raw.githubusercontent.com/<you>/unraid-plex-failover-plugin/main"
+
+STATE_DIR="/var/tmp/plex_failover"
+PERSIST_DIR="/boot/config/plugins/plex-failover"
+BIN_DIR="/usr/local/sbin"
+COMP_DIR="/etc/bash_completion.d"
+ICON_DIR="/usr/local/emhttp/plugins/plex-failover"
+LOG_DIR="/var/log"
+CRON_DIR="/etc/cron.d"
+
+DBSYNC_CMD="/usr/local/sbin/plex_db_sync"
+DBSYNC_MIN_INTERVAL=600              # seconds between auto-syncs (10m)
+DBSYNC_STAMP="$STATE_DIR/last_db_sync"
+
+mkdir -p "$STATE_DIR" "$PERSIST_DIR" "$BIN_DIR" "$COMP_DIR" "$ICON_DIR" "$LOG_DIR" "$CRON_DIR"
+
+# Fetch scripts (add the new one)
+curl -fsSL "$REPO_RAW/bin/plex_failover_supervisor.sh" -o "$PERSIST_DIR/plex_failover_supervisor.sh"
+curl -fsSL "$REPO_RAW/bin/plex_env_setup.sh"         -o "$PERSIST_DIR/plex_env_setup.sh"
+curl -fsSL "$REPO_RAW/bin/plex-mode"                 -o "$PERSIST_DIR/plex-mode"
+curl -fsSL "$REPO_RAW/bin/plex_db_sync.sh"           -o "$PERSIST_DIR/plex_db_sync.sh"
+chmod 0755 "$PERSIST_DIR/"*
+
+# Install runtime copies (RAM)
+install -D -m 0755 "$PERSIST_DIR/plex_failover_supervisor.sh" "$BIN_DIR/plex_failover_supervisor"
+install -D -m 0755 "$PERSIST_DIR/plex_env_setup.sh"           "$BIN_DIR/plex_env_setup"
+install -D -m 0755 "$PERSIST_DIR/plex-mode"                   "$BIN_DIR/plex-mode"
+install -D -m 0755 "$PERSIST_DIR/plex_db_sync.sh"             "$BIN_DIR/plex_db_sync"
+
+# Completion + icon (unchanged)
+curl -fsSL "$REPO_RAW/completion/plex-mode" -o "$PERSIST_DIR/plex-mode.completion"
+install -D -m 0644 "$PERSIST_DIR/plex-mode.completion" "$COMP_DIR/plex-mode"
+grep -q '/etc/bash_completion' /root/.bashrc 2>/dev/null || echo '[ -f /etc/bash_completion ] && . /etc/bash_completion' >> /root/.bashrc
+[ -f /etc/bash_completion ] && . /etc/bash_completion
+[ -f /etc/bash_completion.d/plex-mode ] && . /etc/bash_completion.d/plex-mode
+
+# Community Apps icon
+curl -fsSL "$REPO_RAW/icons/plex-failover.png" -o "$ICON_DIR/plex-failover.png"
+
+# Initialize environment + default mode
+/usr/local/sbin/plex_env_setup || true
+[ -f "$STATE_DIR/mode" ] || echo auto > "$STATE_DIR/mode"
+
+# CRON: mirror DB periodically (safe because script no-ops if secondary runs)
+# Every 10 minutes; adjust if you want.
+echo '*/10 * * * * root /usr/local/sbin/plex_db_sync >/dev/null 2>&1' > "$CRON_DIR/plex-failover"
+chmod 0644 "$CRON_DIR/plex-failover"
+/etc/rc.d/rc.crond restart >/dev/null 2>&1 || true
+
+# Ensure on-boot startup
+GO_FILE="/boot/config/go"
+START_SNIPPET="# plex-failover start"
+if ! grep -q "$START_SNIPPET" "$GO_FILE" 2>/dev/null; then
+  cat <<'EOF' >> "$GO_FILE"
+
+# plex-failover start
+/usr/local/sbin/plex_env_setup
+nohup /usr/local/sbin/plex_failover_supervisor > /var/log/plex_failover.log 2>&1 &
+# ensure cron line exists (cron file is reinstalled above)
+# plex-failover end
+EOF
+fi
+
+echo "Plex Failover plugin installed."
+    ]]>
+  </FILE>
+
+  <!-- ---------- UNINSTALL SCRIPT ---------- -->
+  <FILE Run="/bin/bash" Method="remove">
+    <![CDATA[
+set -e
+
+# Stop running supervisor if present
+pkill -f /usr/local/sbin/plex_failover_supervisor || true
+
+# Remove binaries and completion
+rm -f /usr/local/sbin/plex_failover_supervisor \
+      /usr/local/sbin/plex_env_setup \
+      /usr/local/sbin/plex-mode \
+      /etc/bash_completion.d/plex-mode
+
+# Remove icon
+rm -rf /usr/local/emhttp/plugins/plex-failover
+
+# Clean go file
+GO_FILE="/boot/config/go"
+if [ -f "$GO_FILE" ]; then
+  awk '
+    $0 == "# plex-failover start" {skip=1; next}
+    $0 == "# plex-failover end"   {skip=0; next}
+    skip != 1 {print}
+  ' "$GO_FILE" > "${GO_FILE}.tmp" && mv "${GO_FILE}.tmp" "$GO_FILE"
+fi
+
+# Keep /boot/config/plugins/plex-failover (user may want to keep configs)
+echo "Plex Failover plugin removed."
+    ]]>
+  </FILE>
+
+</PLUGIN>

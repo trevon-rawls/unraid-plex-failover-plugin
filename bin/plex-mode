@@ -1,0 +1,48 @@
+#!/bin/bash
+# plex-mode: set or show failover mode with change-only notification
+# Usage: plex-mode {auto|primary|secondary|status}
+
+STATE_DIR="/var/tmp/plex_failover"
+MODE_FILE="$STATE_DIR/mode"
+mkdir -p "$STATE_DIR"
+
+# Normalize input (default to status)
+req="$(echo "${1:-status}" | tr '[:upper:]' '[:lower:]')"
+
+# Resolve requested mode value
+case "$req" in
+  auto)                   new="auto" ;;
+  primary|force_primary)  new="force_primary" ;;
+  secondary|force_secondary) new="force_secondary" ;;
+  status)                 new="" ;;  # sentinel for read-only
+  *)
+    echo "Usage: plex-mode {auto|primary|secondary|status}"
+    exit 1
+    ;;
+esac
+
+# Read current mode (default to auto if missing)
+current="$(tr '[:upper:]' '[:lower:]' < "$MODE_FILE" 2>/dev/null | tr -d '[:space:]')"
+[ -z "$current" ] && current="auto"
+
+# Handle status: print and exit without notifying
+if [ -z "$new" ]; then
+  echo "mode=$current"
+  exit 0
+fi
+
+# If no change, print and exit without notifying
+if [ "$new" = "$current" ]; then
+  echo "mode=$current (unchanged)"
+  exit 0
+fi
+
+# Apply change and notify
+printf "%s\n" "$new" > "$MODE_FILE"
+echo "mode changed: $current -> $new"
+
+/usr/local/emhttp/webGui/scripts/notify \
+  -e "Plex Failover" \
+  -s "Mode changed" \
+  -d "mode: $current → $new" \
+  -i normal >/dev/null 2>&1 || true
