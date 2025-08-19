@@ -1,121 +1,63 @@
 <?xml version="1.0"?>
-<PLUGIN name="plex-failover"
-        author="Trevon Rawls"
-        version="2025.08.18"
-        pluginURL="https://raw.githubusercontent.com/trevon-rawls/unraid-plex-failover-plugin/main/plex-failover.plg"
-        icon="shield"
-        min="6.12"
-        support="https://forums.unraid.net/">
-	<CHANGES>
-		<![CDATA[
-  Initial release.
-  ]]>
-	</CHANGES>
-	<!-- ============================================================
-       Install all files to FLASH: /usr/local/bin/plex-failover
-       ============================================================ -->
-	<FILE Name="/usr/local/bin/plex-failover/plex_failover_supervisor.sh" Mode="0755">
-		<URL>https://raw.githubusercontent.com/trevon-rawls/unraid-plex-failover-plugin/main/bin/plex_failover_supervisor.sh</URL>
-	</FILE>
-	<FILE Name="/usr/local/bin/plex-failover/plex_db_sync.sh" Mode="0755">
-		<URL>https://raw.githubusercontent.com/trevon-rawls/unraid-plex-failover-plugin/main/bin/plex_db_sync.sh</URL>
-	</FILE>
-	<FILE Name="/usr/local/bin/plex-failover/plex_env_setup.sh" Mode="0755">
-		<URL>https://raw.githubusercontent.com/trevon-rawls/unraid-plex-failover-plugin/main/bin/plex_env_setup.sh</URL>
-	</FILE>
-	<FILE Name="/usr/local/bin/plex-failover/plex-mode" Mode="0755">
-		<URL>https://raw.githubusercontent.com/trevon-rawls/unraid-plex-failover-plugin/main/bin/plex-mode</URL>
-	</FILE>
-	<FILE Name="/usr/local/bin/plex-failover/plex-mode.bash-completion" Mode="0644">
-		<URL>https://raw.githubusercontent.com/trevon-rawls/unraid-plex-failover-plugin/main/completion/plex-mode.sh</URL>
-	</FILE>
-	<!-- ============================================================
-       Post-install: PATH, completion, autostart, restart supervisor
-       ============================================================ -->
-	<FILE Run="/bin/bash">
-		<![CDATA[
-set -e
+<PLUGIN name="plex-failover" author="trevon-rawls" version="2025.08.19" pluginURL="https://github.com/trevon-rawls/unraid-plex-failover-plugin" support="https://forums.unraid.net/topic/XXXXX">
+  <CHANGES>
+    Installs Plex failover scripts into the User Scripts plugin and keeps supporting scripts under /boot/config/plugins/plex-failover/bin.
+  </CHANGES>
 
-PLUGDIR="/usr/local/bin/plex-failover"
+  <!-- Install all bin/ files to /boot/config/plugins/plex-failover/bin -->
+  <FILE Run="/bin/bash">
+    <![CDATA[
+      BASE="/boot/config/plugins/plex-failover/bin"
+      mkdir -p "$BASE"
 
-# 1) Preflight: ensure files landed
-for f in \
-  "$PLUGDIR/plex_failover_supervisor.sh" \
-  "$PLUGDIR/plex_db_sync.sh" \
-  "$PLUGDIR/plex_env_setup.sh" \
-  "$PLUGDIR/plex-mode" \
-  "$PLUGDIR/plex-mode.bash-completion"
-do
-  if [ ! -s "$f" ]; then
-    echo "ERROR: Missing file: $f (check URL in .plg)"
-    exit 1
-  fi
-done
+      FILES=(
+        plex_failover_supervisor.sh
+        plex_db_sync.sh
+        plex_env_setup.sh
+        plex-mode
+        plex-mode.sh
+        pre-backup.sh
+        post-backup.sh
+      )
 
-# 2) Add plugin dir to PATH for interactive shells
-#    Create a small profile.d drop-in (rebuilt on each boot from this plugin)
-cat >/etc/profile.d/plex-failover.sh <<'EOF'
-# Added by plex-failover plugin
-if ! echo "$PATH" | grep -q "/usr/local/bin/plex-failover" ; then
-  export PATH="$PATH:/usr/local/bin/plex-failover"
-fi
-EOF
-chmod 0644 /etc/profile.d/plex-failover.sh
+      for f in "${FILES[@]}"; do
+        curl -fsSL -o "$BASE/$f" "https://raw.githubusercontent.com/trevon-rawls/unraid-plex-failover-plugin/main/bin/$f"
+        chmod +x "$BASE/$f"
+      done
 
-# 3) Bash completion (copy into RAM)
-install -D -m 0644 "$PLUGDIR/plex-mode.bash-completion" /etc/bash_completion.d/plex-mode
-grep -q '/etc/bash_completion' /root/.bashrc 2>/dev/null || \
-  echo '[ -f /etc/bash_completion ] && . /etc/bash_completion' >> /root/.bashrc
+      # User Scripts integration
+      US_BASE="/boot/config/plugins/user.scripts/scripts"
 
-# 4) One-time environment setup (creates state dir/files)
-bash "$PLUGDIR/plex_env_setup.sh" || true
+      # Failover Supervisor
+      mkdir -p "$US_BASE/Plex Failover Supervisor"
+      echo "Failover supervisor for Plex containers with heartbeat and error detection" > "$US_BASE/Plex Failover Supervisor/description"
+      echo "Plex Failover Supervisor" > "$US_BASE/Plex Failover Supervisor/name"
+      cp "$BASE/plex_failover_supervisor.sh" "$US_BASE/Plex Failover Supervisor/script"
 
-# 5) Autostart: add to /boot/config/go if missing (runs from FLASH)
-if ! grep -q "plex_failover_supervisor.sh" /boot/config/go; then
-  cat <<'EOF' >> /boot/config/go
+      # DB Sync
+      mkdir -p "$US_BASE/Plex DB Sync"
+      echo "Synchronizes Plex databases between primary and secondary" > "$US_BASE/Plex DB Sync/description"
+      echo "Plex DB Sync" > "$US_BASE/Plex DB Sync/name"
+      cp "$BASE/plex_db_sync.sh" "$US_BASE/Plex DB Sync/script"
 
-# plex-failover start
-export LOG_FILE="/var/log/plex_failover.log"
-export HEARTBEAT_SECS=60
-export DEBUG=1
-nohup /usr/local/bin/plex-failover/plex_failover_supervisor.sh >> "${LOG_FILE:-/var/log/plex_failover.log}" 2>&1 &
-# plex-failover end
-EOF
-fi
+      # Plex Mode Init
+      mkdir -p "$US_BASE/Plex Mode Init"
+      echo "Initializes Plex mode file and provides helper command" > "$US_BASE/Plex Mode Init/description"
+      echo "Plex Mode Init" > "$US_BASE/Plex Mode Init/name"
+      cp "$BASE/plex_env_setup.sh" "$US_BASE/Plex Mode Init/script"
 
-# 6) Restart supervisor now (from FLASH) to pick up updates
-pkill -f /usr/local/bin/plex-failover/plex_failover_supervisor.sh || true
-export LOG_FILE="/var/log/plex_failover.log" HEARTBEAT_SECS=60 DEBUG=1
-nohup /usr/local/bin/plex-failover/plex_failover_supervisor.sh >> "${LOG_FILE:-/var/log/plex_failover.log}" 2>&1 &
+      echo "Plex failover plugin installed. Scripts available in User Scripts."
+    ]]>
+  </FILE>
 
-echo "plex-failover installed; commands available after new shells pick up PATH."
-  ]]>
-	</FILE>
-	<!-- ============================================================
-       Uninstall: stop, remove PATH/comp, remove plugin dir
-       ============================================================ -->
-<FILE Run="/bin/bash" Method="remove"><![CDATA[
-set -e
-
-# stop supervisor
-pkill -f plex_failover_supervisor.sh || true
-
-# remove autostart
-sed -i '/plex-failover start/,/plex-failover end/d' /boot/config/go || true
-
-# drop-ins
-rm -f /etc/profile.d/plex-failover.sh || true
-rm -f /etc/bash_completion.d/plex-mode || true
-rm -f /usr/local/sbin/plex-mode || true
-
-# runtime (cover both flat installs and the subdir you’re using)
-rm -f /usr/local/bin/plex_failover_supervisor /usr/local/bin/plex_db_sync /usr/local/bin/plex_env_setup /usr/local/bin/plex-mode || true
-rm -f /usr/local/sbin/plex_failover_supervisor /usr/local/sbin/plex_db_sync /usr/local/sbin/plex_env_setup /usr/local/sbin/plex-mode || true
-rm -rf /usr/local/bin/plex-failover || true
-
-# flash plugin dir
-rm -rf /boot/config/plugins/plex-failover || true
-
-echo "plex-failover: uninstall cleanup complete."
-]]></FILE>
+  <!-- Clean uninstall -->
+  <FILE Run="/bin/bash" Method="remove">
+    <![CDATA[
+      rm -rf "/boot/config/plugins/plex-failover"
+      rm -rf "/boot/config/plugins/user.scripts/scripts/Plex Failover Supervisor"
+      rm -rf "/boot/config/plugins/user.scripts/scripts/Plex DB Sync"
+      rm -rf "/boot/config/plugins/user.scripts/scripts/Plex Mode Init"
+      echo "Plex failover plugin removed."
+    ]]>
+  </FILE>
 </PLUGIN>
