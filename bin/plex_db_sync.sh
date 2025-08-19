@@ -28,6 +28,13 @@ container_running() {
   docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null | tr -d '[:space:]' || echo "false"
 }
 
+# Optional: disable sync while backups run
+DISABLE_FILE="/var/tmp/plex_backup_in_progress"
+if [ -f "$DISABLE_FILE" ]; then
+  log "Backup flag found ($DISABLE_FILE). Skipping database sync."
+  exit 0
+fi
+
 # Prefer flock (fd 9), else mkdir lock
 take_lock() {
   if have flock; then
